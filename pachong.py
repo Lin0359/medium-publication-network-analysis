@@ -1,313 +1,152 @@
-"""
-INST414 Medium RSS Collector (rate-limit friendly)
-
-Fixes:
-- Handles HTTP 429 with exponential backoff + jitter
-- Adds polite delay between requests
-- If publication feed is blocked, continue with tag feeds (still enough data)
-- Limits expansion to avoid spamming Medium
-
-Outputs:
-- CSV + JSON with fields: title, link (canonical), pubDate, author, tags, source
-"""
-
+"""Collect Medium publication metadata from RSS feeds."""
 from __future__ import annotations
 
+import argparse
 import csv
 import json
-import os
-import re
-import time
 import random
-from dataclasses import dataclass, asdict
-from datetime import datetime
-from typing import Dict, List, Set, Tuple
-from urllib.parse import urlsplit, urlunsplit, quote
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+import xml.etree.ElementTree as ET
 
 import requests
-from bs4 import BeautifulSoup
+from requests import Response
 
-
-# ===================== EDIT THESE =====================
 PUBLICATION_SLUG = "inst414-data-science-tech"
 SEED_TAG = "inst414featured"
-TARGET = 100
-OUT_DIR = r"C:\Users\hl667\Desktop\代码作业\414\A2"
-# ======================================================
-
-TIMEOUT = 30
-
-# Polite crawling controls
-BASE_DELAY_SEC = 2.0          # wait between successful requests
-JITTER_SEC = 1.5              # random extra wait
-MAX_RETRIES = 6               # retries for 429/5xx
-BACKOFF_BASE = 2.0            # exponential backoff base
+FIELDS = ["title", "link", "pubDate", "author", "tags", "source"]
+USER_AGENT = "Mozilla/5.0 (compatible; INST414AcademicProject/1.0; +https://github.com/Lin0359/414A2)"
 
 
 @dataclass
-class Post:
+class Article:
     title: str
     link: str
     pubDate: str
     author: str
-    tags: List[str]
+    tags: list[str]
     source: str
 
 
-def normalize(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip()
-
-
-def canonicalize(url: str) -> str:
-    """Remove query parameters to deduplicate."""
-    if not url:
-        return ""
+def canonical_url(url: str) -> str:
     parts = urlsplit(url.strip())
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    if parts.netloc.lower().endswith("medium.com"):
+        path = parts.path.rstrip("/")
+        if parts.netloc.lower() == "www.medium.com":
+            parts = parts._replace(netloc="medium.com")
+        return urlunsplit((parts.scheme or "https", parts.netloc, path, "", ""))
+    return url.strip()
 
 
-def safe_filename(s: str) -> str:
-    s = re.sub(r"[^\w\-]+", "_", (s or "").strip())
-    return s[:120] if len(s) > 120 else s
+def local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1].lower()
 
 
-def slugify_tag(tag: str) -> str:
-    t = (tag or "").strip().lower()
-    t = re.sub(r"\s+", "-", t)
-    t = re.sub(r"[^a-z0-9\-]", "", t)
-    t = re.sub(r"\-+", "-", t).strip("-")
-    return t
+def element_text(element: ET.Element, names: set[str]) -> str:
+    for child in element.iter():
+        if local_name(child.tag) in names and child.text:
+            return child.text.strip()
+    return ""
 
 
-def feed_publication(slug: str, limit: int = 100) -> str:
-    slug = slug.strip().strip("/")
-    return f"https://medium.com/feed/{slug}?limit={limit}"
-
-
-def feed_tag(tag: str, limit: int = 100) -> str:
-    slug = slugify_tag(tag)
-    slug = quote(slug)
-    return f"https://medium.com/feed/tag/{slug}?limit={limit}"
-
-
-def polite_sleep():
-    time.sleep(BASE_DELAY_SEC + random.random() * JITTER_SEC)
-
-
-def fetch_xml(url: str) -> str:
-    """
-    Fetch RSS XML with retry on 429 / transient errors.
-    """
-    headers = {
-        # More browser-like UA helps a bit
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/121.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
-    }
-
-    last_err = None
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            r = requests.get(url, headers=headers, timeout=TIMEOUT)
-            if r.status_code == 200:
-                polite_sleep()
-                return r.text
-
-            # Handle 429 rate limiting
-            if r.status_code == 429:
-                retry_after = r.headers.get("Retry-After")
-                if retry_after and retry_after.isdigit():
-                    wait = int(retry_after)
-                else:
-                    # exponential backoff + jitter
-                    wait = (BACKOFF_BASE ** attempt) + random.random() * 2.0
-                print(f"429 Too Many Requests. Backing off for {wait:.1f}s (attempt {attempt}/{MAX_RETRIES})")
-                time.sleep(wait)
-                last_err = RuntimeError(f"HTTP 429 for {url}")
-                continue
-
-            # 5xx retry
-            if 500 <= r.status_code < 600:
-                wait = (BACKOFF_BASE ** attempt) + random.random() * 2.0
-                print(f"{r.status_code} Server error. Retrying in {wait:.1f}s (attempt {attempt}/{MAX_RETRIES})")
-                time.sleep(wait)
-                last_err = RuntimeError(f"HTTP {r.status_code} for {url}")
-                continue
-
-            # Other errors: stop
-            r.raise_for_status()
-
-        except Exception as e:
-            last_err = e
-            wait = (BACKOFF_BASE ** attempt) + random.random() * 2.0
-            print(f"Request error: {e}. Retrying in {wait:.1f}s (attempt {attempt}/{MAX_RETRIES})")
-            time.sleep(wait)
-
-    raise last_err if last_err else RuntimeError("Unknown fetch error")
-
-
-def parse_rss(xml_text: str, source: str) -> List[Post]:
-    soup = BeautifulSoup(xml_text, "xml")
-    items = soup.find_all("item")
-    posts: List[Post] = []
-
-    for it in items:
-        title = normalize(it.find("title").get_text(strip=True) if it.find("title") else "")
-        raw_link = normalize(it.find("link").get_text(strip=True) if it.find("link") else "")
-        link = canonicalize(raw_link)
-
-        pub_date = normalize(it.find("pubDate").get_text(strip=True) if it.find("pubDate") else "")
-        creator = it.find("dc:creator")
-        author = normalize(creator.get_text(strip=True) if creator else "")
-
-        categories = [normalize(c.get_text(strip=True)) for c in it.find_all("category")]
-        seen = set()
-        tags: List[str] = []
-        for t in categories:
-            if t and t not in seen:
-                seen.add(t)
-                tags.append(t)
-
-        if title and link:
-            posts.append(Post(title=title, link=link, pubDate=pub_date, author=author, tags=tags, source=source))
-
-    return posts
-
-
-def merge(store: Dict[str, Post], new_posts: List[Post]) -> int:
-    added = 0
-    for p in new_posts:
-        if not p.link:
+def parse_feed(content: bytes, source: str) -> list[Article]:
+    root = ET.fromstring(content)
+    articles = []
+    for item in root.iter():
+        if local_name(item.tag) not in {"item", "entry"}:
             continue
-        if p.link not in store:
-            store[p.link] = p
-            added += 1
-        else:
-            if len(p.tags) > len(store[p.link].tags):
-                store[p.link] = p
-    return added
+        title = element_text(item, {"title"})
+        link = ""
+        for child in item:
+            if local_name(child.tag) == "link":
+                link = child.attrib.get("href", "") or (child.text or "").strip()
+                if child.attrib.get("rel", "alternate") == "alternate":
+                    break
+        if not link:
+            continue
+        author = element_text(item, {"creator", "author"})
+        pub_date = element_text(item, {"pubdate", "published", "updated"})
+        tags = [child.attrib.get("term", "").strip() or (child.text or "").strip()
+                for child in item.iter() if local_name(child.tag) == "category"]
+        articles.append(Article(title, canonical_url(link), pub_date, author,
+                                list(dict.fromkeys(tag for tag in tags if tag)), source))
+    return articles
 
 
-def top_tags_from_store(store: Dict[str, Post], limit: int = 25) -> List[Tuple[str, int]]:
-    freq: Dict[str, int] = {}
-    for p in store.values():
-        for t in p.tags:
-            freq[t] = freq.get(t, 0) + 1
-    return sorted(freq.items(), key=lambda x: x[1], reverse=True)[:limit]
+def fetch_feed(session: requests.Session, url: str, retries: int) -> bytes:
+    for attempt in range(retries + 1):
+        response: Response = session.get(url, timeout=25)
+        if response.status_code == 429 or response.status_code >= 500:
+            if attempt == retries:
+                response.raise_for_status()
+            retry_after = response.headers.get("Retry-After")
+            delay = float(retry_after) if retry_after and retry_after.isdigit() else min(2 ** attempt + random.random(), 30)
+            time.sleep(delay)
+            continue
+        response.raise_for_status()
+        return response.content
+    raise RuntimeError(f"Unable to fetch feed: {url}")
 
 
-def write_csv(posts: List[Post], path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["title", "link", "pubDate", "author", "tags", "source"])
-        for p in posts:
-            w.writerow([p.title, p.link, p.pubDate, p.author, "|".join(p.tags), p.source])
+def collect(target: int, delay: float, retries: int) -> list[Article]:
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml"})
+    feeds = [(f"https://medium.com/feed/{PUBLICATION_SLUG}", "publication")]
+    found: dict[str, Article] = {}
+    index = 0
+    while index < len(feeds) and len(found) < target:
+        url, source = feeds[index]
+        index += 1
+        try:
+            items = parse_feed(fetch_feed(session, url, retries), source)
+        except (requests.RequestException, ET.ParseError) as error:
+            print(f"Skipped {url}: {error}")
+            continue
+        for article in items:
+            if article.link:
+                found.setdefault(article.link, article)
+                for tag in article.tags:
+                    tag_url = f"https://medium.com/feed/tag/{tag}"
+                    if len(feeds) < target * 2 and all(existing[0] != tag_url for existing in feeds):
+                        feeds.append((tag_url, f"tag:{tag}"))
+        if index < len(feeds) and len(found) < target:
+            time.sleep(max(0, delay))
+    return list(found.values())[:target]
 
 
-def write_json(posts: List[Post], path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump([asdict(p) for p in posts], f, ensure_ascii=False, indent=2)
+def save_articles(articles: list[Article], output_dir: Path) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    csv_path = output_dir / f"medium_articles_{stamp}.csv"
+    json_path = output_dir / f"medium_articles_{stamp}.json"
+    rows = [asdict(article) for article in articles]
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDS)
+        writer.writeheader()
+        for row in rows:
+            row["tags"] = "|".join(row["tags"])
+            writer.writerow(row)
+    json_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    return csv_path, json_path
 
 
-def print_stats(posts: List[Post]) -> None:
-    print(f"\nCollected unique posts: {len(posts)}")
-    if not posts:
-        return
-    total_tags = sum(len(p.tags) for p in posts)
-    print(f"Total tags assigned (sum over posts): {total_tags}")
-    print(f"Avg tags per post: {total_tags / len(posts):.2f}")
-
-    freq: Dict[str, int] = {}
-    for p in posts:
-        for t in p.tags:
-            freq[t] = freq.get(t, 0) + 1
-    print("\nTop tags:")
-    for t, c in sorted(freq.items(), key=lambda x: x[1], reverse=True)[:12]:
-        print(f"- {t}: {c}")
-
-    print("\nSample (first 3):")
-    for p in posts[:3]:
-        print(f"- {p.title} | tags={len(p.tags)} | {p.link}")
-
-
-def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
-
-    store: Dict[str, Post] = {}
-    tried_tags: Set[str] = set()
-
-    # 1) Always start from the course tag feed (most relevant + usually enough)
-    seed_tag_url = feed_tag(SEED_TAG, limit=100)
-    print(f"Fetching SEED TAG feed: {seed_tag_url}")
-    xml = fetch_xml(seed_tag_url)
-    seed_posts = parse_rss(xml, source=f"tag:{slugify_tag(SEED_TAG)}")
-    merge(store, seed_posts)
-    tried_tags.add(SEED_TAG)
-    print(f"  -> items={len(seed_posts)}, unique total={len(store)}")
-
-    # 2) Try publication feed, but if it 429s, do NOT crash—just continue
-    pub_url = feed_publication(PUBLICATION_SLUG, limit=100)
-    print(f"\nFetching PUBLICATION feed: {pub_url}")
-    try:
-        xml = fetch_xml(pub_url)
-        pub_posts = parse_rss(xml, source=f"publication:{PUBLICATION_SLUG}")
-        merge(store, pub_posts)
-        print(f"  -> items={len(pub_posts)}, unique total={len(store)}")
-    except Exception as e:
-        print(f"  -> Skipped publication feed due to error: {e}")
-
-    # 3) Expansion via additional tags (rate-limit friendly)
-    # Limit rounds to avoid too many requests.
-    round_num = 0
-    MAX_ROUNDS = 4   # keep small to avoid 429
-    TAGS_PER_ROUND = 8
-
-    while len(store) < TARGET and round_num < MAX_ROUNDS:
-        round_num += 1
-        ranked_tags = [t for t, _ in top_tags_from_store(store, limit=30) if t not in tried_tags]
-        if not ranked_tags:
-            break
-
-        to_try = ranked_tags[:TAGS_PER_ROUND]
-        print(f"\nExpansion round {round_num}: trying {len(to_try)} tag feeds...")
-
-        for t in to_try:
-            tried_tags.add(t)
-            url = feed_tag(t, limit=100)
-            print(f"  Fetching tag feed: {url}")
-            try:
-                xml = fetch_xml(url)
-                posts = parse_rss(xml, source=f"tag:{slugify_tag(t)}")
-                added = merge(store, posts)
-                print(f"   -> items={len(posts)}, added={added}, unique total={len(store)}")
-            except Exception as e:
-                print(f"   -> Skipped tag '{t}' due to error: {e}")
-
-        # If Medium is strict today, you can manually stop earlier
-        if len(store) < TARGET:
-            print(f"Current unique={len(store)} (target={TARGET}). Continuing politely...")
-
-    posts_list = list(store.values())
-    posts_list = sorted(posts_list, key=lambda p: p.pubDate, reverse=True)
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = f"medium_{safe_filename(PUBLICATION_SLUG)}_{safe_filename(SEED_TAG)}_{ts}"
-    out_csv = os.path.join(OUT_DIR, base + ".csv")
-    out_json = os.path.join(OUT_DIR, base + ".json")
-
-    write_csv(posts_list, out_csv)
-    write_json(posts_list, out_json)
-
-    print_stats(posts_list)
-    print(f"\nSaved CSV : {out_csv}")
-    print(f"Saved JSON: {out_json}")
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", type=int, default=100, help="Maximum unique articles to collect.")
+    parser.add_argument("--output-dir", type=Path, default=Path("data"), help="Folder for the CSV and JSON files.")
+    parser.add_argument("--delay", type=float, default=1.0, help="Seconds between feed requests.")
+    parser.add_argument("--retries", type=int, default=4, help="Retries for rate limits and temporary server errors.")
+    args = parser.parse_args()
+    if args.target < 1 or args.retries < 0 or args.delay < 0:
+        parser.error("--target must be positive; --retries and --delay cannot be negative.")
+    articles = collect(args.target, args.delay, args.retries)
+    csv_path, json_path = save_articles(articles, args.output_dir)
+    print(f"Collected {len(articles)} unique articles.")
+    print(f"CSV:  {csv_path.resolve()}")
+    print(f"JSON: {json_path.resolve()}")
 
 
 if __name__ == "__main__":
