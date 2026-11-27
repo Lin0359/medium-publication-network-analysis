@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="520" viewBox="0 0 1000 520" role="img" aria-labelledby="title desc">
+  <title id="title">Top PageRank articles in the published INST414 snapshot</title>
+  <desc id="desc">A horizontal bar chart showing PageRank scores for the top three articles from a snapshot with 45 articles and 264 shared-tag edges.</desc>
+  <rect width="1000" height="520" rx="18" fill="#f8fafc"/>
+  <text x="56" y="66" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#0f172a">Top articles by PageRank</text>
+  <text x="56" y="102" font-family="Arial, sans-serif" font-size="16" fill="#475569">Published snapshot · 45 articles · 264 shared-tag edges</text>
+  <text x="56" y="146" font-family="Arial, sans-serif" font-size="14" fill="#64748b">Score</text>
+  <line x1="380" y1="164" x2="380" y2="420" stroke="#cbd5e1" stroke-width="1"/>
+  <line x1="380" y1="420" x2="900" y2="420" stroke="#94a3b8" stroke-width="1"/>
+  <g font-family="Arial, sans-serif" font-size="14" fill="#64748b">
+    <text x="380" y="446" text-anchor="middle">0.000</text><text x="510" y="446" text-anchor="middle">0.008</text><text x="640" y="446" text-anchor="middle">0.016</text><text x="770" y="446" text-anchor="middle">0.024</text><text x="900" y="446" text-anchor="middle">0.032</text>
+  </g>
+  <g stroke="#e2e8f0" stroke-width="1"><line x1="510" y1="164" x2="510" y2="420"/><line x1="640" y1="164" x2="640" y2="420"/><line x1="770" y1="164" x2="770" y2="420"/><line x1="900" y1="164" x2="900" y2="420"/></g>
+  <g font-family="Arial, sans-serif" fill="#0f172a">
+    <text x="56" y="218" font-size="15" font-weight="600">Mapping Artist Collaborations</text><text x="56" y="240" font-size="13" fill="#64748b">on Spotify: A Network Analysis</text>
+    <text x="56" y="302" font-size="15" font-weight="600">Will economic development</text><text x="56" y="324" font-size="13" fill="#64748b">guarantee equal gains?</text>
+    <text x="56" y="386" font-size="15" font-weight="600">Exercise and Mental Health</text><text x="56" y="408" font-size="13" fill="#64748b">correlation analysis</text>
+  </g>
+  <g><rect x="380" y="190" width="517.5" height="48" rx="8" fill="#2563eb"/><rect x="380" y="274" width="496.8" height="48" rx="8" fill="#0f766e"/><rect x="380" y="358" width="496.8" height="48" rx="8" fill="#0f766e"/></g>
+  <g font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#0f172a"><text x="910" y="219">0.03185</text><text x="889" y="303">0.03058</text><text x="889" y="387">0.03058</text></g>
+  <text x="56" y="486" font-family="Arial, sans-serif" font-size="13" fill="#64748b">PageRank describes position in this tag-based network; it is not a measure of article quality or readership.</text>
+</svg>
