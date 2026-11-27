@@ -1,22 +1,25 @@
 # Medium Publication Article Network Analysis
 
-A Python project that collects public Medium RSS metadata and explores article relationships through shared tags. It builds a weighted similarity network, calculates centrality metrics, and creates two visualizations.
+A reproducible Python workflow for collecting public Medium RSS metadata and analyzing how articles in the **INST414 Data Science & Tech** publication relate through shared tags. The project builds a weighted article network, compares four centrality measures, and exports publication ready charts and ranking tables.
 
-> The course dataset is not included. Collect metadata with the script or provide a CSV that matches the schema below.
+> The source dataset is not committed. Run the collector to create your own dated metadata snapshot; analysis results depend on the snapshot and collection date.
 
-## Workflow
+## What it does
 
-1. Collect RSS metadata for the INST414 Data Science & Tech publication.
-2. Filter collected records to articles in the target publication.
-3. Connect articles that share tags; edge weight is the number of shared tags.
-4. Rank articles using PageRank, degree, weighted degree, and betweenness centrality.
-5. Export ranking tables, a network diagram, and a tag-frequency chart.
+- Collects article metadata from the publication RSS feed, with a polite delay and retry handling for rate limits and temporary server errors.
+- Filters records to the target publication and represents each article as a network node.
+- Connects two articles when they share at least one tag. Edge weight is the number of shared tags.
+- Ranks articles by PageRank, degree, weighted degree, and betweenness centrality. Betweenness treats stronger similarity as a shorter distance by using the inverse edge weight.
+- Produces a network diagram, a tag frequency chart, CSV ranking tables, and a JSON summary.
 
-## Files
+## Project files
 
-- analysis.py — builds the similarity network, calculates metrics, and saves charts.
-- pachong.py — collects RSS metadata into CSV and JSON files.
-- requirements.txt — Python dependencies.
+| File | Purpose |
+| --- | --- |
+| `pachong.py` | Collects RSS metadata and writes timestamped CSV and JSON snapshots. |
+| `analysis.py` | Validates the CSV schema, builds the weighted graph, calculates metrics, and exports charts and results. |
+| `requirements.txt` | Lists the Python dependencies. |
+| `.gitignore` | Excludes local data, generated outputs, and virtual environments. |
 
 ## Setup
 
@@ -24,39 +27,52 @@ Requires Python 3.10 or newer.
 
 ```bash
 python -m venv .venv
-# macOS/Linux
+# macOS / Linux
 source .venv/bin/activate
 # Windows PowerShell
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
 
-## Run
+## Run the workflow
 
-Collect metadata (requests are spaced out and retried when rate-limited):
-
-```bash
-python pachong.py
-```
-
-Analyze the CSV created by the collector:
+Collect up to 100 unique articles into the local `data/` directory:
 
 ```bash
-python analysis.py
+python pachong.py --target 100 --output-dir data
 ```
 
-The CSV schema is: title, link, pubDate, author, tags, and source. Tags are pipe-separated.
+The collector prints the timestamped CSV path. Pass that file to the analysis script:
 
-## Outputs
+```bash
+python analysis.py --input data/medium_articles_YYYYMMDDTHHMMSSZ.csv --output-dir outputs
+```
 
-The analysis writes three top-10 ranking tables, network_top35.png, and top_tags.png alongside the input CSV. The collector writes timestamped CSV and JSON files to the project output directory.
+Replace the example timestamp with the CSV filename printed by the collector. You can also analyze an existing CSV if it has these columns: `title`, `link`, `pubDate`, `author`, `tags`, and `source`. The `tags` column uses a vertical bar (`|`) between tags.
 
-## Method and limitations
+Useful collector options:
 
-Each article is a node; an undirected edge joins two articles when their tag lists overlap. Edge weight is the number of shared tags. PageRank and weighted degree use this as connection strength. Betweenness should interpret stronger similarity as a shorter path, so edge distance should be the inverse of the shared-tag count.
+- `--target`: maximum number of unique article records (default: 100).
+- `--delay`: seconds between feed requests (default: 1).
+- `--retries`: retries for HTTP 429 and temporary server errors (default: 4).
+- `--output-dir`: local folder for the dated CSV and JSON files (default: `data`).
 
-This is exploratory analysis of RSS metadata. Shared tags indicate topical overlap, not article quality, influence, or causation. RSS feeds can change over time, so rerunning collection may produce different results. The collector reads feed metadata only and does not download article text. Keep requests moderate and follow Medium's terms and feed behavior.
+## Generated outputs
 
-## Data source
+The analysis writes these files to the selected output directory:
 
-Public feeds from INST414 Data Science & Tech (https://medium.com/feed/inst414-data-science-tech) and related Medium tag feeds. This is a student project and is not affiliated with Medium or the University of Maryland.
+- `top_10_pagerank.csv`
+- `top_10_degree.csv`
+- `top_10_weighted_degree.csv`
+- `top_10_betweenness.csv`
+- `article_similarity_network.png`
+- `top_tags.png`
+- `summary.json`
+
+The collector writes a matching `medium_articles_<timestamp>.csv` and `.json` snapshot. Local data and generated outputs are excluded from version control.
+
+## Method and scope
+
+This project analyzes RSS metadata and tags; it does not download or analyze the full text of articles. Shared tags are a simple proxy for topical similarity, so centrality scores describe relationships in this tag based graph rather than article quality or influence. RSS availability and the metadata returned by Medium can change over time.
+
+The weighted graph supports PageRank and weighted degree as similarity strength. Betweenness uses `distance = 1 / shared_tag_count`, since shortest path algorithms interpret smaller distances as closer relationships. The network visualization uses a fixed layout seed for repeatable placement and labels only a subset of nodes to keep the chart readable.
