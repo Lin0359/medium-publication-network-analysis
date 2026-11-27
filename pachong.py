@@ -18,7 +18,7 @@ from requests import Response
 PUBLICATION_SLUG = "inst414-data-science-tech"
 SEED_TAG = "inst414featured"
 FIELDS = ["title", "link", "pubDate", "author", "tags", "source"]
-USER_AGENT = "Mozilla/5.0 (compatible; INST414AcademicProject/1.0; +https://github.com/Lin0359/414A2)"
+USER_AGENT = "Mozilla/5.0 (compatible; INST414AcademicProject/1.0; +https://github.com/Lin0359/medium-publication-network-analysis)"
 
 
 @dataclass
