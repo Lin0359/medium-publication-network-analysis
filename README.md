@@ -1,25 +1,43 @@
 # Medium Publication Article Network Analysis
 
-A reproducible Python workflow for collecting public Medium RSS metadata and analyzing how articles in the **INST414 Data Science & Tech** publication relate through shared tags. The project builds a weighted article network, compares four centrality measures, and exports publication ready charts and ranking tables.
+A reproducible Python project that collects public Medium RSS metadata and models thematic overlap across the INST414: Data Science & Tech publication as a weighted article network.
 
-> The source dataset is not committed. Run the collector to create your own dated metadata snapshot; analysis results depend on the snapshot and collection date.
+[Published analysis](https://medium.com/inst414-data-science-tech/finding-the-structural-hubs-of-inst414-a-network-analysis-of-course-publications-1b9f7c3cb4e7) · [Source code](https://github.com/Lin0359/414A2)
 
-## What it does
+## Published snapshot
 
-- Collects article metadata from the publication RSS feed, with a polite delay and retry handling for rate limits and temporary server errors.
-- Filters records to the target publication and represents each article as a network node.
-- Connects two articles when they share at least one tag. Edge weight is the number of shared tags.
-- Ranks articles by PageRank, degree, weighted degree, and betweenness centrality. Betweenness treats stronger similarity as a shorter distance by using the inverse edge weight.
-- Produces a network diagram, a tag frequency chart, CSV ranking tables, and a JSON summary.
+The report analyzed a point-in-time snapshot of **45 articles** and **264 shared-tag edges**. The figure below summarizes the three highest PageRank scores reported in that analysis. It is a historical result; a new RSS collection can produce different articles, edges, and rankings.
+
+![Top three articles by PageRank in the published INST414 snapshot](assets/pagerank_snapshot.svg)
+
+PageRank here describes structural position in a tag-based network. It does not measure article quality, readership, or causal influence. The relationship between articles is based on author-assigned Medium tags, not full-text semantic similarity.
+
+## Data source and method
+
+- **Source:** public RSS metadata from the INST414 Medium publication. The project does not use a Kaggle dataset or a separate API.
+- **Fields:** title, canonical article URL, publication date, author, tags, and feed source.
+- **Nodes:** one per unique article in the target publication.
+- **Edges:** two articles are connected when they share one or more tags; edge weight is the number of shared tags.
+- **Measures:** PageRank, degree, weighted degree, and betweenness. Betweenness uses `distance = 1 / shared_tag_count`, so stronger tag overlap is treated as a shorter path.
+
+The source snapshot is not committed. RSS availability and article metadata can change, so outputs depend on the collection date. The collector saves dated CSV and JSON snapshots to make each local run traceable.
+
+## What the workflow produces
+
+- A network visualization and a tag-frequency chart.
+- Top-10 CSV rankings for each centrality measure.
+- A JSON summary with article, edge, and tag counts.
+- A dated CSV and JSON file for the collected RSS metadata.
 
 ## Project files
 
 | File | Purpose |
 | --- | --- |
 | `pachong.py` | Collects RSS metadata and writes timestamped CSV and JSON snapshots. |
-| `analysis.py` | Validates the CSV schema, builds the weighted graph, calculates metrics, and exports charts and results. |
-| `requirements.txt` | Lists the Python dependencies. |
-| `.gitignore` | Excludes local data, generated outputs, and virtual environments. |
+| `analysis.py` | Validates the input schema, builds the weighted graph, calculates metrics, and exports charts and rankings. |
+| `requirements.txt` | Lists Python dependencies. |
+| `.gitignore` | Excludes local data, generated results, and virtual environments. |
+| `assets/pagerank_snapshot.svg` | Static chart of the top PageRank scores reported in the published analysis. |
 
 ## Setup
 
@@ -36,43 +54,35 @@ python -m pip install -r requirements.txt
 
 ## Run the workflow
 
-Collect up to 100 unique articles into the local `data/` directory:
+Collect up to 100 unique articles into data/:
 
 ```bash
 python pachong.py --target 100 --output-dir data
 ```
 
-The collector prints the timestamped CSV path. Pass that file to the analysis script:
+Use the timestamped CSV path printed by the collector:
 
 ```bash
 python analysis.py --input data/medium_articles_YYYYMMDDTHHMMSSZ.csv --output-dir outputs
 ```
 
-Replace the example timestamp with the CSV filename printed by the collector. You can also analyze an existing CSV if it has these columns: `title`, `link`, `pubDate`, `author`, `tags`, and `source`. The `tags` column uses a vertical bar (`|`) between tags.
+Replace the example timestamp with the filename from your run. The analysis can also read an existing CSV with the columns title, link, pubDate, author, tags, and source. The tags field uses a vertical bar (|) between tag names.
 
-Useful collector options:
+### Collector options
 
-- `--target`: maximum number of unique article records (default: 100).
-- `--delay`: seconds between feed requests (default: 1).
-- `--retries`: retries for HTTP 429 and temporary server errors (default: 4).
-- `--output-dir`: local folder for the dated CSV and JSON files (default: `data`).
+- --target: maximum number of unique records (default: 100).
+- --delay: delay between feed requests in seconds (default: 1).
+- --retries: retry count for rate limits and temporary server errors (default: 4).
+- --output-dir: directory for collected CSV and JSON files (default: data).
 
-## Generated outputs
+### Generated outputs
 
-The analysis writes these files to the selected output directory:
+- top_10_pagerank.csv
+- top_10_degree.csv
+- top_10_weighted_degree.csv
+- top_10_betweenness.csv
+- article_similarity_network.png
+- top_tags.png
+- summary.json
 
-- `top_10_pagerank.csv`
-- `top_10_degree.csv`
-- `top_10_weighted_degree.csv`
-- `top_10_betweenness.csv`
-- `article_similarity_network.png`
-- `top_tags.png`
-- `summary.json`
-
-The collector writes a matching `medium_articles_<timestamp>.csv` and `.json` snapshot. Local data and generated outputs are excluded from version control.
-
-## Method and scope
-
-This project analyzes RSS metadata and tags; it does not download or analyze the full text of articles. Shared tags are a simple proxy for topical similarity, so centrality scores describe relationships in this tag based graph rather than article quality or influence. RSS availability and the metadata returned by Medium can change over time.
-
-The weighted graph supports PageRank and weighted degree as similarity strength. Betweenness uses `distance = 1 / shared_tag_count`, since shortest path algorithms interpret smaller distances as closer relationships. The network visualization uses a fixed layout seed for repeatable placement and labels only a subset of nodes to keep the chart readable.
+Generated files and local data are excluded from version control. Re-run the workflow to create charts for a fresh snapshot.
